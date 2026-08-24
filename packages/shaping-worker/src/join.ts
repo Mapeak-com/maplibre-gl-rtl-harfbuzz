@@ -1,60 +1,53 @@
 /**
  * Finding the drawing half.
  *
- * A worker has no way to know whether the other half is listening yet -- MapLibre may have started
- * loading the plugin before the page finished setting it up -- so the announcement is repeated
- * until it is answered. `BroadcastChannel` delivers to whoever is listening at the time and keeps
- * nothing for anyone who arrives later, which is what makes the repetition necessary.
+ * MapLibre gives every worker an actor of its own, and the page registers its handlers before it
+ * hands MapLibre the plugin URL — so by the time this runs there is always something listening, and
+ * asking once is enough.
  */
 
-import {CHANNEL_NAME, type ChannelMessage, type WelcomeMessage} from '@maplibre-rtl-harfbuzz/protocol';
+import {
+    GLOBAL_DISPATCHER_ID,
+    JOIN,
+    type Join,
+    type Welcome,
+    type WorkerActor,
+    type WorkerGlobal,
+} from '@maplibre-rtl-harfbuzz/protocol';
 
-/** How often to announce ourselves again while waiting to be answered. */
-const RETRY_INTERVAL_MS = 100;
+declare const self: WorkerGlobal;
 
-/**
- * How long to keep trying.
- *
- * MapLibre waits five seconds for a plugin to register itself before giving up on it, so there is
- * no point still trying after four.
- */
-const GIVE_UP_MS = 4000;
+export type Joined = {
+    actor: WorkerActor;
+    welcome: Welcome;
+    worker: string;
+};
 
-export async function join(
-    channelName: string = CHANNEL_NAME,
-): Promise<{channel: BroadcastChannel; welcome: WelcomeMessage}> {
+export async function join(): Promise<Joined> {
+    const actor = self.worker?.actor;
+    if (!actor) {
+        throw new Error(
+            'maplibre-gl-rtl-harfbuzz: this file is MapLibre\'s worker half of the plugin, and it ' +
+                'found no MapLibre worker around it. Pass its URL to `registerHarfBuzzTextPlugin` ' +
+                'rather than loading it yourself.',
+        );
+    }
+
     const worker = workerId();
-    const channel = new BroadcastChannel(channelName);
+    const welcome = (await actor.sendAsync({
+        type: JOIN,
+        data: {worker} satisfies Join,
+        targetMapId: GLOBAL_DISPATCHER_ID,
+    })) as Welcome | null;
 
-    return new Promise((resolve, reject) => {
-        const announce = () => channel.postMessage({type: 'hello', worker});
-        const retry = setInterval(announce, RETRY_INTERVAL_MS);
-        const giveUp = setTimeout(() => {
-            stop();
-            channel.close();
-            reject(
-                new Error(
-                    'maplibre-gl-rtl-harfbuzz: no glyph provider answered. Call ' +
-                        '`registerHarfBuzzTextPlugin` before the map starts loading tiles, and check ' +
-                        'that both halves are using the same channel name.',
-                ),
-            );
-        }, GIVE_UP_MS);
+    if (!welcome) {
+        throw new Error(
+            'maplibre-gl-rtl-harfbuzz: no glyph provider answered. Call ' +
+                '`registerHarfBuzzTextPlugin` before the map starts loading tiles.',
+        );
+    }
 
-        const stop = () => {
-            clearInterval(retry);
-            clearTimeout(giveUp);
-        };
-
-        channel.onmessage = (event: MessageEvent<ChannelMessage>) => {
-            const message = event.data;
-            if (message.type !== 'welcome' || message.worker !== worker) return;
-            stop();
-            resolve({channel, welcome: message});
-        };
-
-        announce();
-    });
+    return {actor, welcome, worker};
 }
 
 function workerId(): string {

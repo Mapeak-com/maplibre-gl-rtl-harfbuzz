@@ -4,14 +4,13 @@
 
 import init, {Shaper, codepointPool} from '@maplibre-rtl-harfbuzz/wasm';
 import {
-    CHANNEL_NAME,
     DEFAULT_PROTOCOL,
     glyphsUrl,
     isPoolRange,
     parseGlyphsUrl,
     POOL_END,
     POOL_START,
-    type ChannelMessage,
+    type MainThreadDispatcher,
 } from '@maplibre-rtl-harfbuzz/protocol';
 
 import {loadFont, type FontSource, type LoadedFont} from './fonts.ts';
@@ -30,8 +29,11 @@ export type GlyphProviderOptions = {
     wasmUrl?: string | URL;
     /** The protocol to answer glyph requests under. A style's `glyphs` must name the same one. */
     protocol?: string;
-    /** The channel the two halves of the plugin meet on. Only worth setting to keep two apart. */
-    channelName?: string;
+    /**
+     * MapLibre's `getGlobalDispatcher()`, which is how the two halves of the plugin reach each
+     * other: the page registers handlers on it, and each worker answers through its own actor.
+     */
+    dispatcher: MainThreadDispatcher;
 };
 
 /** What MapLibre passes a protocol handler, of which only the URL matters here. */
@@ -44,7 +46,6 @@ export class GlyphProvider {
 
     private readonly shaper: Shaper;
     private readonly fonts: LoadedFont[];
-    private readonly channel: BroadcastChannel;
     private readonly registry: WorkerRegistry;
     private inspectionShaper: Shaper | null = null;
 
@@ -54,22 +55,19 @@ export class GlyphProvider {
         this.protocol = options.protocol ?? DEFAULT_PROTOCOL;
         this.glyphsUrl = glyphsUrl(this.protocol);
 
-        this.channel = new BroadcastChannel(options.channelName ?? CHANNEL_NAME);
-        this.registry = new WorkerRegistry({
-            post: (message) => this.channel.postMessage(message),
+        this.registry = new WorkerRegistry(options.dispatcher, {
             register: (entries) => this.shaper.registerGlyphs(entries),
-            welcome: () => ({wasmUrl, fonts}),
-            warn: (message) => console.warn(`maplibre-gl-rtl-harfbuzz: ${message}`),
+            welcome: () => ({wasmUrl, fonts: fonts.map(({bytes, weight, width}) => ({bytes, weight, width}))}),
         });
-        this.channel.onmessage = (event: MessageEvent<ChannelMessage>) => this.registry.receive(event.data);
     }
 
     /**
      * Loads the WebAssembly module and the fonts, and starts listening for shaping workers.
      *
-     * The workers are told what to shape with over the channel rather than fetching it themselves,
-     * so that both halves are certain to be working from the same font files -- a glyph index means
-     * nothing unless both halves resolved it against the same file.
+     * The workers are told what to shape with rather than fetching it themselves, so that both
+     * halves are certain to be working from the same font files -- a glyph index means nothing
+     * unless both halves resolved it against the same file. Listening starts before this returns,
+     * so that a worker loading the plugin can never ask before anything is there to answer.
      */
     static async create(options: GlyphProviderOptions): Promise<GlyphProvider> {
         const wasmUrl = new URL(options.wasmUrl ?? 'shaper_bg.wasm', import.meta.url).href;
@@ -93,7 +91,9 @@ export class GlyphProvider {
             }
         });
 
-        return new GlyphProvider(shaper, options, fonts, wasmUrl);
+        const provider = new GlyphProvider(shaper, options, fonts, wasmUrl);
+        await provider.registry.listen();
+        return provider;
     }
 
     /**
@@ -135,8 +135,6 @@ export class GlyphProvider {
     }
 
     destroy(): void {
-        this.registry.clear();
-        this.channel.close();
         this.shaper.free();
         this.inspectionShaper?.free();
         this.inspectionShaper = null;

@@ -10,9 +10,11 @@ export type MapLibreLike = {
     removeProtocol: (protocol: string) => void;
     setRTLTextPlugin: (url: string, deferred?: boolean) => Promise<void>;
     getRTLTextPluginStatus: () => string;
+    /** The channel the two halves of the plugin reach each other over. */
+    getGlobalDispatcher: () => unknown;
 };
 
-export type HarfBuzzTextPluginOptions = GlyphProviderOptions & {
+export type HarfBuzzTextPluginOptions = Omit<GlyphProviderOptions, 'dispatcher'> & {
     /**
      * Where the worker half of the plugin is, if not next to this module.
      *
@@ -41,7 +43,10 @@ export async function registerHarfBuzzTextPlugin(
         );
     }
 
-    const provider = await GlyphProvider.create(options);
+    const provider = await GlyphProvider.create({
+        ...options,
+        dispatcher: maplibregl.getGlobalDispatcher() as never,
+    });
     maplibregl.addProtocol(provider.protocol, provider.handleRequest);
 
     try {

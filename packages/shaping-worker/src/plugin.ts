@@ -3,7 +3,6 @@
  */
 
 import init, {Shaper} from '@maplibre-rtl-harfbuzz/wasm';
-import {type ChannelMessage} from '@maplibre-rtl-harfbuzz/protocol';
 
 import {join} from './join.ts';
 import {decodeLines} from './lines.ts';
@@ -27,11 +26,6 @@ export type RTLTextPlugin = {
     ) => Array<[string, number[]]>;
 };
 
-export type ShapingOptions = {
-    /** The channel to find the drawing half on. */
-    channelName?: string;
-};
-
 /**
  * Joins the drawing half, loads what it sends, and returns the plugin MapLibre should register.
  *
@@ -40,8 +34,8 @@ export type ShapingOptions = {
  * everything is ready is deliberate: a plugin that registered early would be asked to shape text it
  * could not yet shape, and MapLibre would carry the unshaped result into tiles it has already built.
  */
-export async function startShaping(options: ShapingOptions = {}): Promise<RTLTextPlugin> {
-    const {channel, welcome} = await join(options.channelName);
+export async function startShaping(): Promise<RTLTextPlugin> {
+    const {actor, welcome} = await join();
     await init({module_or_path: welcome.wasmUrl});
 
     const shaper = new Shaper();
@@ -50,12 +44,8 @@ export async function startShaping(options: ShapingOptions = {}): Promise<RTLTex
     }
     shaper.restrictCodepoints(welcome.codepointStart, welcome.codepointEnd);
 
-    const reporter = new GlyphReporter(shaper, channel, welcome.worker);
-    channel.onmessage = (event: MessageEvent<ChannelMessage>) => {
-        if (event.data.type === 'seal') {
-            reporter.seal(event.data.range, event.data.request);
-        }
-    };
+    const reporter = new GlyphReporter(shaper, actor);
+    reporter.listen();
 
     return createPlugin(shaper, reporter);
 }

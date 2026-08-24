@@ -1,6 +1,5 @@
 /**
- * Keeps track of the shaping workers, and runs the exchange that makes a block of codepoints safe
- * to draw.
+ * Keeps track of the shaping workers, and closes a block of codepoints before it is drawn.
  *
  * MapLibre asks for a block of glyphs once and remembers that it has: a glyph that appears in a
  * block after it has been answered would be asked for never, and would silently not draw. So before
@@ -11,36 +10,33 @@
 
 import {
     codepointRangeForWorker,
-    SEAL_TIMEOUT_MS,
-    type ChannelMessage,
-    type SealedMessage,
-    type WelcomeMessage,
+    JOIN,
+    REPORT_GLYPHS,
+    SEAL_RANGE,
+    type Join,
+    type MainThreadDispatcher,
+    type ReportGlyphs,
+    type Sealed,
+    type SealRange,
+    type Welcome,
 } from '@maplibre-rtl-harfbuzz/protocol';
 
-/** What the registry needs from the outside, so that it can be driven in a test without a channel. */
+/** What the registry needs from the outside, so that it can be driven in a test without a map. */
 export type RegistryPort = {
-    post(message: ChannelMessage): void;
     /** Records what a worker's codepoints stand for. */
     register(entries: Int32Array): void;
     /** What a joining worker is given to shape with. */
-    welcome(): Pick<WelcomeMessage, 'wasmUrl' | 'fonts'>;
-    warn(message: string): void;
-};
-
-type PendingSeal = {
-    outstanding: Set<string>;
-    resolve: () => void;
-    timer: ReturnType<typeof setTimeout>;
+    welcome(): Pick<Welcome, 'wasmUrl' | 'fonts'>;
 };
 
 export class WorkerRegistry {
+    private readonly dispatcher: MainThreadDispatcher;
     private readonly port: RegistryPort;
-    /** Which stretch of the pool each worker was given, so a repeated hello gets the same answer. */
+    /** Which stretch of the pool each worker was given, so a second join gets the same answer. */
     private readonly slices = new Map<string, number>();
-    private readonly pending = new Map<number, PendingSeal>();
-    private nextRequest = 0;
 
-    constructor(port: RegistryPort) {
+    constructor(dispatcher: MainThreadDispatcher, port: RegistryPort) {
+        this.dispatcher = dispatcher;
         this.port = port;
     }
 
@@ -48,85 +44,51 @@ export class WorkerRegistry {
         return this.slices.size;
     }
 
-    /** Handles anything a worker says. Messages from the drawing half itself are ignored. */
-    receive(message: ChannelMessage): void {
-        switch (message.type) {
-            case 'hello':
-                this.port.post({
-                    type: 'welcome',
-                    worker: message.worker,
-                    ...this.port.welcome(),
-                    ...codepointRangeForWorker(this.sliceFor(message.worker)),
-                });
-                break;
-            case 'glyphs':
-                this.port.register(message.entries);
-                break;
-            case 'sealed':
-                this.sealed(message);
-                break;
-        }
+    /** Starts listening for the workers. Handlers are in place before any worker can ask. */
+    async listen(): Promise<void> {
+        await this.dispatcher.registerMessageHandler(JOIN, async (_mapId, {worker}: Join) =>
+            this.welcome(worker),
+        );
+        await this.dispatcher.registerMessageHandler(
+            REPORT_GLYPHS,
+            async (_mapId, {entries}: ReportGlyphs) => {
+                this.port.register(entries);
+            },
+        );
     }
 
     /**
      * Asks every worker to seal a block and waits for them to answer.
      *
-     * A worker that never answers is given up on rather than allowed to stall every glyph request
-     * behind it; the block is then drawn with what is known, which can leave a glyph missing but
-     * cannot leave the map hanging.
+     * A worker that has not loaded the plugin yet answers with `null`, which is MapLibre's own reply
+     * to a message type nothing is listening for. There is nothing to wait for in that case: a
+     * worker with no plugin has allocated nothing.
      */
     async seal(range: number): Promise<void> {
         if (this.slices.size === 0) return;
 
-        const request = this.nextRequest++;
-        const outstanding = new Set(this.slices.keys());
-
-        await new Promise<void>((resolve) => {
-            const timer = setTimeout(() => {
-                this.pending.delete(request);
-                this.port.warn(
-                    `gave up waiting for ${[...outstanding].length} worker(s) to seal codepoint block ${range}; ` +
-                        'some glyphs in it may not draw',
-                );
-                resolve();
-            }, SEAL_TIMEOUT_MS);
-
-            this.pending.set(request, {outstanding, resolve, timer});
-            this.port.post({type: 'seal', request, range});
-        });
-    }
-
-    /** Forgets every worker, so that a rebuilt provider is not waited on by the old ones. */
-    clear(): void {
-        for (const pending of this.pending.values()) {
-            clearTimeout(pending.timer);
-            pending.resolve();
+        const answers = await this.dispatcher.broadcast(SEAL_RANGE, {range} satisfies SealRange);
+        for (const answer of answers) {
+            const entries = (answer as Sealed | null)?.entries;
+            if (entries?.length) this.port.register(entries);
         }
-        this.pending.clear();
-        this.slices.clear();
     }
 
-    private sealed(message: SealedMessage): void {
-        if (message.entries.length) {
-            this.port.register(message.entries);
-        }
-        const pending = this.pending.get(message.request);
-        if (!pending) return;
-
-        pending.outstanding.delete(message.worker);
-        if (pending.outstanding.size > 0) return;
-
-        clearTimeout(pending.timer);
-        this.pending.delete(message.request);
-        pending.resolve();
-    }
-
-    private sliceFor(worker: string): number {
+    private welcome(worker: string): Welcome {
         let slice = this.slices.get(worker);
         if (slice === undefined) {
             slice = this.slices.size;
             this.slices.set(worker, slice);
         }
-        return slice;
+
+        const {wasmUrl, fonts} = this.port.welcome();
+        return {
+            wasmUrl,
+            // Copied, because MapLibre's worker protocol *transfers* array buffers rather than
+            // cloning them. Sending the originals would empty them, leaving the next worker -- and
+            // the page's own copy -- with nothing to read.
+            fonts: fonts.map((font) => ({...font, bytes: font.bytes.slice(0)})),
+            ...codepointRangeForWorker(slice),
+        };
     }
 }

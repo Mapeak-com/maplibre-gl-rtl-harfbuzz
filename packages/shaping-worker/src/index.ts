@@ -10,4 +10,4 @@
  */
 
 export {startShaping} from './plugin.ts';
-export type {ShapingOptions, RTLTextPlugin} from './plugin.ts';
+export type {RTLTextPlugin} from './plugin.ts';

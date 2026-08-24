@@ -111,8 +111,15 @@ same signed distance field a glyph server would have sent. For a glyph the font 
 the pen, the offset is baked into the glyph's own `left` and `top` — which the glyph protocol buffer
 carries as *signed* values. That is what puts a niqqud point under its letter rather than after it.
 
-The two halves talk over a `BroadcastChannel`: the workers say what codepoints they have invented,
-and the main thread asks them to stop allocating into a block of codepoints before it draws it.
+The two halves talk over MapLibre's own worker protocol, reached through `getGlobalDispatcher()` on
+the page and `self.worker.actor` in each worker: the workers say what codepoints they have invented,
+and the page asks them to stop allocating into a block of codepoints before it draws it. MapLibre's
+list of message types is closed, so naming a message of our own needs a cast; it lives in one file,
+[packages/protocol/src/actor.ts](packages/protocol/src/actor.ts), rather than at every call.
+
+Two parts of this are meant to be temporary — answering the `glyphs` URL through `addProtocol`, and
+borrowing the worker protocol — and both go away if the API in the proposal lands. That is what §2
+of it is about.
 
 ## Layout
 
@@ -136,7 +143,8 @@ TypeScript, as npm workspaces:
 
 ```
 packages/
-  protocol/                   what the two halves say to each other; depends on nothing
+  protocol/                   what the two halves say to each other, and the one cast into
+                              MapLibre's worker protocol; depends on nothing
   glyph-provider/             the drawing half, on the main thread
   shaping-worker/             the shaping half, in MapLibre's workers
   wasm/                       the WebAssembly build (generated)

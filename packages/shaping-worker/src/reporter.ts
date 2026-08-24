@@ -5,23 +5,37 @@
  * task, so a report scheduled as a task of its own carries a whole tile's new glyphs in one message.
  *
  * Batching is only an optimization, never a correctness question. Before a block of codepoints is
- * drawn the drawing half asks for it to be sealed, and the answer to that carries everything not
- * yet reported -- so a glyph allocated a moment ago is never missed, however the batching fell.
+ * drawn the page asks for it to be sealed, and the answer to that carries everything not yet
+ * reported -- so a glyph allocated a moment ago is never missed, however the batching fell.
  */
 
 import type {Shaper} from '@maplibre-rtl-harfbuzz/wasm';
-import type {ChannelMessage} from '@maplibre-rtl-harfbuzz/protocol';
+import {
+    GLOBAL_DISPATCHER_ID,
+    REPORT_GLYPHS,
+    SEAL_RANGE,
+    type ReportGlyphs,
+    type Sealed,
+    type SealRange,
+    type WorkerActor,
+} from '@maplibre-rtl-harfbuzz/protocol';
 
 export class GlyphReporter {
     private readonly shaper: Shaper;
-    private readonly channel: {postMessage(message: ChannelMessage): void};
-    private readonly worker: string;
+    private readonly actor: WorkerActor;
     private scheduled = false;
 
-    constructor(shaper: Shaper, channel: {postMessage(message: ChannelMessage): void}, worker: string) {
+    constructor(shaper: Shaper, actor: WorkerActor) {
         this.shaper = shaper;
-        this.channel = channel;
-        this.worker = worker;
+        this.actor = actor;
+    }
+
+    /** Answers the page when it closes a block of codepoints, and starts listening for that. */
+    listen(): void {
+        this.actor.registerMessageHandler(SEAL_RANGE, async (_mapId, {range}: SealRange) => {
+            this.shaper.sealRange(range);
+            return {entries: this.shaper.takeNewGlyphs()} satisfies Sealed;
+        });
     }
 
     /** Reports whatever has been allocated, once the current task is over. */
@@ -33,23 +47,12 @@ export class GlyphReporter {
         setTimeout(() => {
             this.scheduled = false;
             const entries = this.shaper.takeNewGlyphs();
-            if (entries.length) {
-                this.channel.postMessage({type: 'glyphs', worker: this.worker, entries});
-            }
+            if (!entries.length) return;
+            void this.actor.sendAsync({
+                type: REPORT_GLYPHS,
+                data: {entries} satisfies ReportGlyphs,
+                targetMapId: GLOBAL_DISPATCHER_ID,
+            });
         }, 0);
-    }
-
-    /**
-     * Closes a block of codepoints to further allocation and hands over everything allocated in it
-     * so far, so that the block can be drawn complete.
-     */
-    seal(range: number, request: number): void {
-        this.shaper.sealRange(range);
-        this.channel.postMessage({
-            type: 'sealed',
-            worker: this.worker,
-            request,
-            entries: this.shaper.takeNewGlyphs(),
-        });
     }
 }
