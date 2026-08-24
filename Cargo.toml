@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/text-domain",
+    "crates/glyph-pbf",
+    "crates/sdf-rasterizer",
+    "crates/font-set",
+    "crates/text-shaping",
+    "crates/glyph-registry",
+    "crates/wasm-bindings",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/maplibre/maplibre-gl-rtl-harfbuzz"
+
+[workspace.dependencies]
+maplibre-text-domain = { path = "crates/text-domain" }
+maplibre-glyph-pbf = { path = "crates/glyph-pbf" }
+maplibre-sdf-rasterizer = { path = "crates/sdf-rasterizer" }
+maplibre-font-set = { path = "crates/font-set" }
+maplibre-text-shaping = { path = "crates/text-shaping" }
+maplibre-glyph-registry = { path = "crates/glyph-registry" }
+
+# `rustybuzz` is a port of HarfBuzz to Rust rather than a binding to it, so the plugin has no C++
+# in it at all. `ttf-parser` is its font parser, pinned to the version it re-exports.
+rustybuzz = "0.20"
+ttf-parser = "0.25"
+unicode-bidi = "0.3"
+unicode-script = "0.5"
+wasm-bindgen = "0.2"
+
+[profile.release]
+# Size, but not at any price: `z` trades about six per cent of the module for nearly three times
+# the shaping time, and shaping runs on every label of every tile.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

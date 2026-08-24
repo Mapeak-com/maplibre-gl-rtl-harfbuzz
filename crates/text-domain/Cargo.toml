@@ -1,0 +1,9 @@
+[package]
+name = "maplibre-text-domain"
+description = "Types, constants and capability traits shared by the MapLibre text shaping plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]

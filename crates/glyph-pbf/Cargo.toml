@@ -1,0 +1,10 @@
+[package]
+name = "maplibre-glyph-pbf"
+description = "Writes the glyph protocol buffer MapLibre GL JS fetches from a glyphs URL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+maplibre-text-domain.workspace = true

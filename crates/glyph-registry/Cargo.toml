@@ -1,0 +1,11 @@
+[package]
+name = "maplibre-glyph-registry"
+description = "Gives shaped glyphs codepoints MapLibre can carry, and turns those codepoints back into glyphs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+maplibre-text-domain.workspace = true
+maplibre-glyph-pbf.workspace = true

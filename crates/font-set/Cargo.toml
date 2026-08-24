@@ -1,0 +1,12 @@
+[package]
+name = "maplibre-font-set"
+description = "The fallback chain of font files a style is shaped and drawn with"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+maplibre-text-domain.workspace = true
+rustybuzz.workspace = true
+ttf-parser.workspace = true

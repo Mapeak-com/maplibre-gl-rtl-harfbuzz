@@ -1,0 +1,28 @@
+{
+  "name": "maplibre-gl-rtl-harfbuzz-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build:wasm && npm run build:js && npm run sync-debug",
+    "build:wasm": "node scripts/build-wasm.ts",
+    "build:js": "node packages/maplibre-gl-rtl-harfbuzz/build.ts",
+    "fetch-fonts": "node scripts/fetch-fonts.ts",
+    "dev": "npm run build && vite",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json",
+    "test": "cargo test --workspace && npm run typecheck",
+    "sync-debug": "node scripts/sync-debug.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "esbuild": "^0.25.0",
+    "maplibre-gl": "^6.5.0",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>maplibre-gl-rtl-harfbuzz · debug</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6/dist/maplibre-gl.css">
+<style>
+    :root {
+        color-scheme: dark;
+        --bg: #0f1115;
+        --panel: #171a21;
+        --line: #262b35;
+        --text: #e7eaf0;
+        --dim: #98a2b3;
+        --accent: #6ab0f3;
+        --bad: #f2856d;
+        --good: #7fd4a0;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 30rem;
+        height: 100vh;
+    }
+    @media (max-width: 60rem) { body { grid-template-columns: 1fr; grid-template-rows: 50vh 1fr; height: auto; } }
+
+    #map { height: 100%; min-height: 20rem; }
+
+    aside {
+        border-left: 1px solid var(--line);
+        overflow-y: auto;
+        padding: 1.25rem 1.25rem 4rem;
+        background: var(--panel);
+    }
+    @media (max-width: 60rem) { aside { border-left: 0; border-top: 1px solid var(--line); } }
+
+    h1 { font-size: 1rem; margin: 0 0 .25rem; letter-spacing: .01em; }
+    h2 { font-size: .8rem; margin: 1.75rem 0 .6rem; text-transform: uppercase; letter-spacing: .09em; color: var(--dim); font-weight: 600; }
+    p { margin: .35rem 0; color: var(--dim); }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem; }
+
+    .controls { display: grid; gap: .6rem; }
+    .row { display: flex; align-items: center; gap: .6rem; }
+    .row label { flex: 0 0 5.5rem; color: var(--dim); font-size: .82rem; }
+    input[type="text"], select {
+        flex: 1; min-width: 0; background: #10131a; color: var(--text);
+        border: 1px solid var(--line); border-radius: 6px; padding: .45rem .6rem; font-size: .9rem;
+    }
+    input[type="range"] { flex: 1; accent-color: var(--accent); }
+    .value { width: 3rem; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+    .samples { display: grid; gap: .3rem; }
+    .samples button {
+        text-align: start; background: #10131a; color: var(--text); border: 1px solid var(--line);
+        border-radius: 6px; padding: .45rem .6rem; cursor: pointer; font-size: .95rem;
+    }
+    .samples button:hover { border-color: var(--accent); }
+    .samples button small { display: block; color: var(--dim); font-size: .72rem; }
+
+    .render { border: 1px solid var(--line); border-radius: 8px; padding: .7rem .8rem; margin-bottom: .7rem; background: #10131a; }
+    .render h3 { margin: 0 0 .1rem; font-size: .78rem; font-weight: 600; }
+    .render h3 .tag { font-weight: 400; color: var(--dim); }
+    .render .note { font-size: .74rem; color: var(--dim); margin: .1rem 0 .5rem; }
+    .render .canvas-wrap { overflow-x: auto; }
+    .render canvas, .render .reference { display: block; }
+    .reference { color: var(--text); white-space: nowrap; }
+
+    .bad h3 { color: var(--bad); }
+    .good h3 { color: var(--good); }
+
+    table { width: 100%; border-collapse: collapse; font-size: .74rem; }
+    th, td { text-align: right; padding: .18rem .35rem; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+    th { color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; font-size: .66rem; }
+    td:first-child, th:first-child { text-align: left; }
+    .shaped { color: var(--accent); }
+
+    #status { font-size: .8rem; color: var(--dim); }
+    #status.error { color: var(--bad); }
+</style>
+</head>
+<body>
+    <div id="map"></div>
+    <aside>
+        <h1>maplibre-gl-rtl-harfbuzz</h1>
+        <p id="status">Loading the plugin…</p>
+
+        <h2>Text</h2>
+        <div class="controls">
+            <div class="row">
+                <label for="text">Text</label>
+                <input type="text" id="text" spellcheck="false">
+            </div>
+            <div class="row">
+                <label for="size">Size</label>
+                <input type="range" id="size" min="10" max="72" step="1" value="28">
+                <span class="value" id="size-value">28</span>
+            </div>
+        </div>
+
+        <h2>Samples</h2>
+        <div class="samples" id="samples"></div>
+
+        <h2>How it renders</h2>
+        <div class="render bad">
+            <h3>Without shaping <span class="tag">— MapLibre today</span></h3>
+            <p class="note" id="without-note"></p>
+            <div class="canvas-wrap"><canvas id="canvas-plain"></canvas></div>
+        </div>
+        <div class="render good">
+            <h3>With this plugin <span class="tag">— the same distance fields the map uses</span></h3>
+            <div class="canvas-wrap"><canvas id="canvas-shaped"></canvas></div>
+        </div>
+        <div class="render">
+            <h3>Browser reference <span class="tag">— Canvas2D, same font files</span></h3>
+            <p class="note">What the browser's own HarfBuzz makes of it, for comparison.</p>
+            <div class="canvas-wrap"><div class="reference" id="reference"></div></div>
+        </div>
+
+        <h2>Map</h2>
+        <div class="controls">
+            <div class="row">
+                <label for="halo">Halo</label>
+                <input type="checkbox" id="halo" checked>
+            </div>
+            <div class="row">
+                <label for="along-line">Along a line</label>
+                <input type="checkbox" id="along-line">
+            </div>
+        </div>
+
+        <h2>Shaped glyphs</h2>
+        <p class="note" id="glyph-summary"></p>
+        <table>
+            <thead>
+                <tr><th>#</th><th>font</th><th>glyph</th><th>dx</th><th>dy</th><th>adv</th><th>from</th></tr>
+            </thead>
+            <tbody id="glyphs"></tbody>
+        </table>
+        <p class="note">
+            Offsets are in quarters of a pixel and advances in whole pixels, both at MapLibre's 24 pixel em.
+            A row in blue is a glyph no codepoint stands for any more.
+        </p>
+    </aside>
+    <script type="module" src="./main.ts"></script>
+</body>
+</html>

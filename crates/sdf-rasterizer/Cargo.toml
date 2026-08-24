@@ -1,0 +1,12 @@
+[package]
+name = "maplibre-sdf-rasterizer"
+description = "Draws glyph outlines into the signed distance fields MapLibre's symbol shader samples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+maplibre-text-domain.workspace = true
+maplibre-font-set.workspace = true
+ttf-parser.workspace = true

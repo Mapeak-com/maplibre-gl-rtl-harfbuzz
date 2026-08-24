@@ -1,0 +1,44 @@
+{
+  "name": "maplibre-gl-rtl-harfbuzz",
+  "version": "0.1.0",
+  "description": "Complex-script shaping and right-to-left text for MapLibre GL JS, with HarfBuzz in WebAssembly",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./text-plugin.mjs": "./dist/text-plugin.mjs",
+    "./shaper_bg.wasm": "./dist/shaper_bg.wasm"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "maplibre",
+    "maplibre-gl-js",
+    "harfbuzz",
+    "rtl",
+    "bidi",
+    "shaping",
+    "opentype",
+    "hebrew",
+    "arabic",
+    "devanagari"
+  ],
+  "scripts": {
+    "build": "node build.ts"
+  },
+  "dependencies": {
+    "@maplibre-rtl-harfbuzz/glyph-provider": "*",
+    "@maplibre-rtl-harfbuzz/protocol": "*",
+    "@maplibre-rtl-harfbuzz/shaping-worker": "*",
+    "@maplibre-rtl-harfbuzz/wasm": "*"
+  },
+  "peerDependencies": {
+    "maplibre-gl": ">=6.0.0"
+  }
+}

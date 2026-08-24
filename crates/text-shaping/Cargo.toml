@@ -1,0 +1,15 @@
+[package]
+name = "maplibre-text-shaping"
+description = "Bidirectional resolution, script itemization and HarfBuzz shaping for MapLibre labels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+maplibre-text-domain.workspace = true
+maplibre-font-set.workspace = true
+rustybuzz.workspace = true
+ttf-parser.workspace = true
+unicode-bidi.workspace = true
+unicode-script.workspace = true

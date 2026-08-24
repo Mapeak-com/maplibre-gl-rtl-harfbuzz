@@ -1,0 +1,25 @@
+[package]
+name = "maplibre-shaper-wasm"
+description = "WebAssembly bindings for the MapLibre HarfBuzz text shaping plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+maplibre-text-domain.workspace = true
+maplibre-font-set.workspace = true
+maplibre-glyph-registry.workspace = true
+maplibre-sdf-rasterizer.workspace = true
+maplibre-text-shaping.workspace = true
+wasm-bindgen.workspace = true
+
+[dev-dependencies]
+ttf-parser.workspace = true
+
+[package.metadata.wasm-pack.profile.release]
+# The default `wasm-opt` invocation rejects the bulk memory operations rustc now emits by default.
+wasm-opt = ['-O3', '--converge', '--enable-bulk-memory', '--enable-nontrapping-float-to-int']
