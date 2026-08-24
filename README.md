@@ -14,8 +14,9 @@ writing systems are not like that:
 | Tamil, Khmer, Thai | vowels and subscripts placed after their consonants | placed around and under them |
 | mixed direction | logical order, left to right | the order it is read in |
 
-It renders on **unmodified maplibre-gl-js 6.5.0**. How it manages that, and what MapLibre could add
-so that it would not have to, is in [docs/maplibre-api-proposal.md](docs/maplibre-api-proposal.md).
+It renders on **unmodified maplibre-gl-js 6.5.0**.
+[docs/maplibre-api-proposal.md](docs/maplibre-api-proposal.md) proposes the text shaping API
+MapLibre would need for a plugin like this to be a plugin rather than a set of workarounds.
 
 ## Using it
 
@@ -70,7 +71,7 @@ draws hairlines.
 - **`text-letter-spacing` on shaped text.** MapLibre adds the spacing between every glyph, including
   between a mark and its base. Leave it at zero for scripts that need shaping.
 - **`is-supported-script`.** A style using that expression still falls back to `name:latin` for
-  Indic scripts, because the list behind it is hard-coded in MapLibre. See §3.2 of the proposal.
+  Indic scripts, because the list behind it is hard-coded in MapLibre. See §5 of the proposal.
 - **Fonts the plugin was not given.** There is no fallback to a glyph server; a character no font
   covers simply does not draw.
 
@@ -118,8 +119,9 @@ list of message types is closed, so naming a message of our own needs a cast; it
 [packages/protocol/src/actor.ts](packages/protocol/src/actor.ts), rather than at every call.
 
 Two parts of this are meant to be temporary — answering the `glyphs` URL through `addProtocol`, and
-borrowing the worker protocol — and both go away if the API in the proposal lands. That is what §2
-of it is about.
+borrowing the worker protocol. Both are here because there is no alternative in MapLibre 6, and both
+would come out if the proposed API landed: glyphs would come from the plugin's `getGlyph`, and with
+nothing to coordinate between the halves there would be no message to send.
 
 ## Layout
 

@@ -1,22 +1,14 @@
-# What MapLibre GL JS would need for this to stop being a workaround
+# A text shaping API for MapLibre GL JS
 
-This plugin renders complex scripts and pointed right-to-left text on **unmodified MapLibre GL JS
-6.5.0**. It does so through an interface that was never meant to carry it, and the way it gets
-through is worth writing down — both because it shows what the current interface can and cannot
-express, and because the shape of the workaround is a fair sketch of the API that would replace it.
-
-Nothing here is needed for the plugin to work. It works now. What follows is what would make it
-smaller, faster, and correct in the corners where it currently is not — and what would let it stop
-doing two things it should not be doing.
+A proposal for one plugin interface that can carry complex text shaping, with the existing
+right-to-left plugin adapted onto it rather than kept beside it.
 
 ---
 
-## 1. Where the current interface stops
-
-Three facts about `main` as of 6.5.0.
+## 1. The gap
 
 **The text plugin interface is `string → string`.** `RTLTextPlugin` in
-`src/source/rtl_text_plugin_worker.ts` is:
+`src/source/rtl_text_plugin_worker.ts`:
 
 ```ts
 applyArabicShaping: (a: string) => string;
@@ -26,9 +18,8 @@ processStyledBidirectionalText: ((c: string, b: number[], a: number[]) => Array<
 
 A string cannot say *this glyph, from this font, a quarter of a pixel below the pen, taking no width
 of its own*. So it cannot express a Hebrew niqqud point, an Arabic tashkeel mark, a Devanagari
-conjunct, or a Tamil ligature. The name of the first function is a fair summary of its range: it was
-built for Arabic joining, and Arabic joining happens to be expressible as a string because Unicode
-carries presentation forms for it. Nothing else is.
+conjunct, or a Tamil ligature. Arabic joining is the exception rather than the rule: it is
+expressible as a string only because Unicode carries presentation forms for it.
 
 **Layout is one codepoint, one glyph, one advance.** `shapeLines` in `src/symbol/shaping.ts`:
 
@@ -39,197 +30,168 @@ const positionedGlyph = {glyph: codePoint, x, y: y + SHAPING_DEFAULT_OFFSET, …
 x += metrics.advance * section.scale + spacing;
 ```
 
-There is no per-glyph offset, and glyph identity *is* the codepoint, all the way down through
-`GlyphManager`, `GlyphAtlas` and `getGlyphQuads`.
+There is no per-glyph offset, and glyph identity *is* the codepoint, through `GlyphManager`,
+`GlyphAtlas` and `getGlyphQuads`.
 
-**Two things are already right, and the workaround rests entirely on them.** In
-`src/style/parse_glyph_pbf.ts` the `left` and `top` metrics are read with `readSVarint` — they are
-**signed**. And `GlyphManager._downloadAndCacheRangePromise` computes `Math.floor(id / 256)` with no
-upper bound, so codepoints above the basic plane are fetched like any other. Please keep both.
-
-## 2. What the plugin does with that, and what it costs
-
-Shaping runs in `applyArabicShaping`, because that is the one point where a glyph can be introduced
-*before* `SymbolBucket.populate` collects the tile's glyph dependencies. Every glyph that no longer
-stands for a character is given a codepoint from the supplementary private use areas, and the offset
-the font asked for is baked into that glyph's signed `left` and `top`.
-
-That much is a fair use of the interface as it stands. Two further things are not, and are marked
-below as what they are.
-
-| Cost | Why | |
-| --- | --- | --- |
-| Glyphs are served through `addProtocol`, and the style gives up its `glyphs` URL | The plugin has no other way to hand MapLibre a picture for a glyph it invented | **transitional — §3.2** |
-| A message type squeezed into MapLibre's worker protocol with a cast | The protocol is reachable from both halves, but its message list is closed | **transitional — §3.4** |
-| A round trip before every block of shaped glyphs | MapLibre asks for a block of 256 once, so the block must be closed to further allocation before it is answered | goes away with §3.2 |
-| ~131 000 shaped glyphs per page, divided between workers | The size of the two private use planes | goes away with §3.2 |
-| `is-supported-script` still says no | `codePointRequiresComplexTextShaping` is a hard-coded regex that no plugin can affect | §3.3 |
-| `text-letter-spacing` breaks clusters | Spacing is added between every glyph, including between a mark and its base | §3.5 |
-| Vertical text is untouched | Vertical layout assumes one codepoint is one glyph, and `charInComplexShapingScript` is Arabic-only | out of scope here |
-
-**The two transitional ones are meant to go.** Answering the `glyphs` URL from a protocol handler is
-not what `addProtocol` is for, and reaching into the worker protocol with a cast is not something a
-plugin should have to do. Both are in this plugin because there is no alternative today; if §3.2 and
-§3.4 land, both come out, and the plugin stops touching anything it was not offered.
-
----
-
-## 3. The proposal
-
-### 3.1 One plugin interface, covering both kinds of plugin
-
-The heart of it — and it should be a *single* interface, not a second one beside the first.
-`mapbox-gl-rtl-text` must keep working untouched, and a plugin should be able to offer both: full
-shaping where MapLibre supports it, and the old string methods as a fallback where it does not. That
-falls out naturally if every method is optional and MapLibre chooses a path by what it was given.
+## 2. The interface
 
 ```ts
 /** One glyph, positioned by the font's own rules. */
 export type ShapedGlyph = {
-    /** Which font the plugin shaped with; meaningful only to the plugin. */
-    fontId: number;
-    /** The glyph's index in that font. Not a codepoint. */
+    /**
+     * Which font the plugin shaped with; meaningful only to the plugin, and resolved by its
+     * `getGlyph`. Omitted for a glyph MapLibre should draw the way it always has, in which case
+     * `glyphId` is a codepoint and the `glyphs` URL and local fallbacks answer for it.
+     */
+    fontId?: number;
+    /** The glyph's index in that font, or a codepoint when there is no `fontId`. */
     glyphId: number;
-    /** Offset from the pen position, in the same 24 pixel em as `GlyphMetrics`. */
-    dx: number;
-    dy: number;
-    /** How far the pen moves after this glyph. Zero for a mark. */
-    advance: number;
-    /** Where in the input this glyph came from, for style sections and hit testing. */
-    cluster: number;
+    /** Offset from the pen position, in the same 24 pixel em as `GlyphMetrics`. Defaults to zero. */
+    dx?: number;
+    dy?: number;
+    /** How far the pen moves after this glyph; zero for a mark. Defaults to the glyph's own advance. */
+    advance?: number;
+    /** Which style section this glyph belongs to, for its font, scale and colour. */
+    sectionIndex: number;
 };
 
 export interface TextPlugin {
-    // ---- What a plugin can do today. `mapbox-gl-rtl-text` provides exactly these three. ----
-    applyArabicShaping?(text: string): string;
-    processBidirectionalText?(text: string, lineBreaks: number[]): string[];
-    processStyledBidirectionalText?(
-        text: string, sections: number[], lineBreaks: number[],
-    ): Array<[string, number[]]>;
-
-    // ---- What a shaping plugin provides instead. ----
-
-    /** Shapes one run of one section. Returns glyphs in logical order. */
-    shapeText?(text: string, fontStack: string): ShapedGlyph[];
+    /**
+     * Shapes one section of a label, in logical order.
+     *
+     * The fontstack is passed because a shaper cannot shape without knowing the font it is shaping
+     * for. `sectionIndex` is passed so that it can be stamped onto the glyphs, which is what lets
+     * `reorderShapedText` move them around without losing what they belong to.
+     */
+    shapeText(text: string, fontStack: string, sectionIndex: number): ShapedGlyph[];
 
     /**
-     * Puts shaped glyphs into the order they are read in, once the line breaks are known.
-     * Separate from `shapeText` for the same reason it is separate today: the bidirectional
-     * algorithm resolves the order of a *line*, not of a paragraph.
+     * Puts a label's glyphs into the order they are read in, once the line breaks are known.
+     *
+     * Separate from `shapeText` for the same reason the two calls are separate today: the
+     * bidirectional algorithm resolves the order of a *line*, not of a paragraph, so the same words
+     * come out in a different order depending on where the line ends. Line breaks are in UTF-16 code
+     * units of the shaped text, as they are today.
      */
-    reorderShapedText?(glyphs: ShapedGlyph[], lineBreaks: number[]): ShapedGlyph[][];
+    reorderShapedText(glyphs: readonly ShapedGlyph[], lineBreaks: number[]): ShapedGlyph[][];
 
-    /** The picture for a glyph, in the same form `parseGlyphPbf` produces. */
+    /**
+     * The picture for a glyph the plugin shaped, in the form `parseGlyphPbf` produces. Only called
+     * for glyphs that carry a `fontId`. Allowed to be async, since `GlyphManager.getGlyphs` already
+     * is throughout.
+     */
     getGlyph?(fontId: number, glyphId: number): StyleGlyph | Promise<StyleGlyph>;
 
-    /** ISO 15924 codes this plugin can shape, or `'*'` for anything its fonts cover. See §3.3. */
+    /** ISO 15924 codes this plugin can shape, or `'*'` for anything its fonts cover. See §5. */
     supportedScripts?: string[] | '*';
 }
 ```
 
-MapLibre takes the shaping path when `shapeText`, `reorderShapedText` and `getGlyph` are all there,
-and the string path when the three older methods are. `RTLWorkerPlugin.isParsed()` becomes "has one
-complete set or the other" instead of "has all three of these", and `setMethods` keeps whichever it
-was given. A plugin that ships both sets works on every MapLibre version, which is what any plugin
-that wants a user base is going to want to do.
+Three of those fields are optional for a reason worth stating on its own: **a shaped glyph must be
+able to describe an ordinary one.** A glyph with no `fontId`, no offset and no advance is exactly
+what MapLibre draws today — a codepoint, at its own advance, on the baseline. That is what makes §3
+possible, and it also means a plugin only has to say what it is actually changing.
 
-Two notes on the interface itself:
+## 3. Adapting the existing plugin rather than keeping two interfaces
 
-- **`shapeText` needs the fontstack.** `applyArabicShaping` is not given one, and a shaper cannot
-  shape without knowing the font. This plugin works around it by owning every font in the style,
-  which is precisely the arrangement §3.2 would let it stop insisting on.
-- **`getGlyph` should be allowed to be async.** `GlyphManager.getGlyphs` is already async
-  throughout, so this costs nothing and lets a plugin fetch or rasterize lazily.
+`setRTLTextPlugin` should go on accepting a plugin that implements the three string methods, but
+MapLibre's pipeline should only ever see one interface. The old shape survives as an adapter, not as
+a second branch through `shaping.ts`.
 
-Where it lands inside MapLibre, roughly:
+It adapts cleanly because for such a plugin **a glyph is its codepoint**, so nothing is lost either
+way across the boundary:
+
+```ts
+function fromRTLTextPlugin(plugin: RTLTextPlugin): TextPlugin {
+    return {
+        shapeText(text, _fontStack, sectionIndex) {
+            return [...plugin.applyArabicShaping(text)].map((char) => ({
+                glyphId: char.codePointAt(0)!,
+                sectionIndex,
+            }));
+        },
+
+        reorderShapedText(glyphs, lineBreaks) {
+            const text = String.fromCodePoint(...glyphs.map((glyph) => glyph.glyphId));
+            const sections = glyphs.flatMap((glyph) =>
+                glyph.glyphId > 0xffff ? [glyph.sectionIndex, glyph.sectionIndex] : [glyph.sectionIndex],
+            );
+
+            return plugin
+                .processStyledBidirectionalText(text, sections, lineBreaks)
+                .map(([line, lineSections]) => {
+                    let codeUnit = 0;
+                    return [...line].map((char) => {
+                        const glyph = {glyphId: char.codePointAt(0)!, sectionIndex: lineSections[codeUnit]};
+                        codeUnit += char.length;
+                        return glyph;
+                    });
+                });
+        },
+    };
+}
+```
+
+`getGlyph` is absent, so every glyph falls through to the `glyphs` URL and the local fallbacks, which
+is where they come from today. `processBidirectionalText` is the single-section case of
+`processStyledBidirectionalText` and needs no separate treatment.
+
+That adapter is written out in full because it is the load-bearing claim here, and it has been run:
+against a plugin implementing the three string methods, `shapeText` followed by
+`reorderShapedText` produces exactly what calling the string methods directly produces — same
+codepoints, same per-code-unit section indices, same lines — for right-to-left text, mixed
+direction, three nested bidirectional levels, line breaks, and text whose codepoints are outside the
+basic plane. (In real code the two `String.fromCodePoint(...)` spreads want chunking; a long label
+will otherwise overflow the argument limit.)
+
+The only thing the adapter cannot recover is which *input* character a glyph came from, since the
+string methods do not report it. Nothing in MapLibre needs that today, which is why `ShapedGlyph`
+carries `sectionIndex` rather than a cluster index. If a cluster index is ever wanted, it should be
+optional, and the adapter should leave it out.
+
+`RTLWorkerPlugin.setMethods` becomes: wrap what it was given if it looks like the old interface,
+keep it as it is if it looks like the new one. `isParsed()` asks whether it has a `TextPlugin`.
+
+## 4. Where it lands
 
 - **`src/symbol/shaping.ts`** — `shapeLines` stops computing `x` and reads `dx`, `dy` and `advance`
-  off the shaped glyph. `PositionedGlyph` already carries `x` and `y`, so this is mostly *removing*
-  arithmetic. It is the only change that matters for correctness; the rest is plumbing. If it is
-  easier to put a hook at the point where a line is split into units for layout rather than to
-  thread glyphs through `TaggedString`, that works just as well — what matters is that the unit
-  stops being a codepoint.
+  off the glyph, defaulting as §2 describes. `PositionedGlyph` already carries `x` and `y`, so this
+  is mostly *removing* arithmetic. It is the only change that matters for correctness. If a hook at
+  the point where a line is split into units for layout is easier than threading glyphs through
+  `TaggedString`, that does just as well — what matters is that the unit stops being a codepoint.
 - **`src/data/bucket/symbol_bucket.ts`** — `calculateGlyphDependencies` collects
   `{fontId, glyphId}` rather than codepoints.
-- **`src/render/glyph_manager.ts`** and **`src/render/glyph_atlas.ts`** — key glyphs by
-  `(fontId, glyphId)` rather than by codepoint. The existing codepoint path stays exactly as it is
-  for styles with no plugin.
+- **`src/render/glyph_manager.ts`**, **`src/render/glyph_atlas.ts`** — key glyphs by
+  `(fontId, glyphId)`, and ask the plugin's `getGlyph` for the ones that carry a `fontId`. Glyphs
+  with no `fontId` take the path they take now, so a style with no plugin is untouched.
+- **`src/source/rtl_text_plugin_worker.ts`** — the adapter of §3.
 
-### 3.2 Glyphs from the plugin, not from a protocol handler
+## 5. Two smaller things
 
-`getGlyph` above is small in the interface and large in what it removes, so it is worth stating on
-its own.
+**Let a plugin say which scripts it supports.** `isStringInSupportedScript` decides whether a style's
+`["is-supported-script", …]` expression sees a name as renderable, which is how styles choose between
+`name` and `name:latin`. It asks `codePointRequiresComplexTextShaping`, a generated regex over
+`U+0900–0DFF`, `U+0F00–109F` and `U+1780–17FF`, and nothing a plugin does can change the answer — so
+a plugin that shapes Devanagari correctly still gets the Latin name. The same list decides when a
+deferred plugin is lazily loaded, through `stringContainsRTLText`, which means a deferred plugin is
+never loaded for Devanagari at all, because Devanagari is not right to left. `supportedScripts`
+settles both.
 
-Today a plugin that invents a glyph has no way to say what it looks like. This one answers the
-style's `glyphs` URL through `addProtocol` instead — which works, but it is not what `addProtocol` is
-for, and it costs the style its glyph server, since the plugin then has to serve *every* glyph in
-every fontstack rather than only the ones it invented.
+**Do not add letter spacing inside a cluster.** `shapeLines` adds `spacing` after every glyph.
+Between a mark and the letter it belongs to that is simply wrong: the mark drifts away from its base
+as `text-letter-spacing` grows. `charAllowsLetterSpacing` already excludes cursive scripts, and a
+glyph with a zero advance is a mark by definition, so skipping spacing after one would fix it with no
+new API at all.
 
-With `getGlyph`, `GlyphManager` asks the plugin for the glyphs the plugin invented and the `glyphs`
-URL for everything else, and three of the costs in §2 disappear at once:
+## 6. One thing to keep
 
-- the style keeps its glyph server, and the plugin's fonts only have to cover the scripts it shapes;
-- there are no private-use codepoints, so no pool to run out of;
-- there are no 256-codepoint blocks to seal, because glyphs are asked for one at a time rather than
-  a block at a time — which removes the round trip *and* the reason for §3.4's message.
-
-That last point is worth spelling out: `GlyphManager` records that it has asked for a block and
-never asks again, which is right for a static glyph server and wrong for a generated one. A glyph
-that becomes needed after its block was fetched can never be drawn. This plugin deals with it by
-asking every worker to stop allocating into a block before answering for it. Per-glyph requests make
-the whole question moot.
-
-### 3.3 Let a plugin say which scripts it supports
-
-`isStringInSupportedScript` decides whether a style's `["is-supported-script", …]` expression sees a
-name as renderable, which is how styles choose between `name` and `name:latin`. It asks
-`codePointRequiresComplexTextShaping`, a generated regex over `U+0900–0DFF`, `U+0F00–109F` and
-`U+1780–17FF`, and nothing a plugin does can change the answer. With this plugin loaded, Devanagari
-renders correctly and `is-supported-script` still says it does not — so a style that asks politely
-gets the Latin name instead of the correct one.
-
-The same list decides when a deferred plugin is lazily loaded, through `stringContainsRTLText`: a
-deferred plugin is never loaded for Devanagari, because Devanagari is not right to left. (This
-plugin therefore has to be registered eagerly.)
-
-`supportedScripts` on the plugin interface settles both.
-
-### 3.4 A general-purpose message on the worker protocol
-
-Smaller than it looked. There is already a channel, and both halves of a plugin can reach it:
-`getGlobalDispatcher()` on the page, `self.worker.actor` inside a worker, both public. What is not
-reachable is the *type*: `MessageType` is a `const enum` and `RequestResponseMessageMap` is a closed
-mapped type, so a message MapLibre does not already know about cannot be named without widening
-them.
-
-So this plugin widens them, in one file, and uses the channel as it stands. It works — an
-unregistered message type is answered with `null` rather than an error, so borrowing the channel
-cannot disturb MapLibre's own traffic — but every plugin that needs to talk to itself will write the
-same cast.
-
-Something like `MessageType.plugin = 'PL'` with `[MessageType.plugin]: [unknown, unknown]` in the
-map, or an escape hatch for namespaced types, would remove the cast. Worth having on its own
-merits — though note that if §3.2 lands, this plugin no longer needs to say anything to itself at
-all, because there is nothing left to coordinate.
-
-### 3.5 Do not add letter spacing inside a cluster
-
-`shapeLines` adds `spacing` after every glyph. Between a mark and the letter it belongs to, that is
-simply wrong — the mark drifts away from its base as `text-letter-spacing` grows.
-`charAllowsLetterSpacing` already excludes cursive scripts; a glyph with a zero advance is a mark by
-definition, and skipping spacing after one would fix it with no new API at all.
+**The two calls.** Shaping before line breaking and reordering after is not an accident of the
+current plugin; it is what the Unicode Bidirectional Algorithm requires. Keep the split in the new
+methods too.
 
 ---
 
-## 4. What I would not change
-
-**The two-call shape of the text plugin.** Shaping before line breaking and reordering after is not
-an accident of the old plugin; it is what the Unicode Bidirectional Algorithm requires. Keep it, and
-keep it in the new methods too.
-
-**Signed `left` and `top` in the glyph protocol buffer, and unbounded codepoints in
-`GlyphManager`.** They are what make the current workaround possible, and they are worth a test each
-so that a future tidy-up does not quietly take them away.
-
-**`addProtocol` itself.** It is a good API. It is simply not the right one for this, and this plugin
-should stop using it for this the moment §3.2 lands.
+*Aside, unrelated to shaping: `MessageType` is a `const enum` and `RequestResponseMessageMap` a
+closed mapped type, so a plugin with two halves cannot name a message of its own on the worker
+protocol without widening both. A `MessageType.plugin`, or an escape hatch for namespaced types,
+would save every such plugin the same cast.*
