@@ -189,6 +189,67 @@ new API at all.
 current plugin; it is what the Unicode Bidirectional Algorithm requires. Keep the split in the new
 methods too.
 
+## 7. A cheaper alternative, and where it stops
+
+Before adopting any of the above it is worth knowing that a large part of the problem can be solved
+without a shaping engine at all, because the browser already has one. The numbers below are measured
+rather than estimated: Chromium, Firefox and WebKit, the fonts pinned with `FontFace`, at 48px.
+
+MapLibre cannot ask the browser for *positioned glyphs* — there is no API for glyph ids, per-glyph
+positions, or the visual order the bidirectional algorithm resolved. But it does not have to work in
+glyphs. It could work in **grapheme clusters**, which `Intl.Segmenter` does give it, drawing each
+cluster with `fillText` and measuring it with `measureText`. All three engines segment identically
+(`दिल्ली → दि | ल्ली`, `ភ្នំពេញ → ភ្នំ | ពេ | ញ`, `שְׁדֵרוֹת → שְׁ | דֵ | ר | וֹ | ת`).
+
+Comparing a string drawn cluster by cluster against the same string drawn whole, as a fraction of
+inked pixels that disagree:
+
+| | per cluster | |
+| --- | --- | --- |
+| Hebrew with niqqud | 0.0% | correct |
+| Devanagari | 0.0% | correct |
+| Khmer | 0.0% | correct |
+| Thai | 0.0% | correct |
+| Bengali | 0.7% | correct |
+| Tamil | 25% | **wrong** — the ligature spans two clusters |
+| Arabic | 72–82% | **wrong** — joining spans every cluster boundary |
+
+Zero-width joiners around each cluster, to stand in for its neighbours, do not rescue Arabic: 70–83%,
+no better than without them.
+
+Two objections that turn out not to hold, and are worth retiring:
+
+- **It is not engine-dependent.** With the font pinned, the three engines measure the same string to
+  within 0.02px — 0.01%. Earlier differences of up to 31% were entirely CSS font *matching* resolving
+  differently per engine, not shaping.
+- **It works where MapLibre needs it.** `OffscreenCanvas` plus `FontFace` in a worker measures
+  correctly in all three engines, so this can run in the same place shaping runs today.
+
+So a cluster-based path inside MapLibre — iterate `Intl.Segmenter` clusters instead of codepoints,
+and let `GlyphManager` rasterize a cluster rather than a codepoint — is a real option, and a much
+smaller change than §2. It reuses the canvas rasterization already there for
+`localIdeographFontFamily`, needs no new dependency, and would render Hebrew with niqqud, Devanagari,
+Bengali, Khmer and Thai correctly.
+
+Where it stops:
+
+- **Cursive scripts.** Arabic, Syriac, N'Ko, Mongolian: joining crosses cluster boundaries, and no
+  arrangement of clusters reproduces it. Arabic would stay at today's quality, via the presentation
+  forms the existing plugin substitutes — so not a regression, but not a fix either.
+- **Tamil**, and any script whose ligatures cross clusters.
+- **Ordering.** There is no bidirectional algorithm in the platform, so ordering still has to come
+  from a plugin or from an implementation in MapLibre.
+- **Font pinning is not optional.** The determinism above holds only because the font was pinned;
+  without it, engines diverge by up to a third of the line width.
+- **Atlas granularity.** One entry per distinct cluster rather than per codepoint, which for
+  Devanagari or Khmer is a much larger set.
+
+A shaping engine earns its place on the first two of those, on giving positions per glyph rather than
+per cluster — which is what text along a curve wants — and on running the same way with no canvas at
+all, which matters for headless and server-side rendering. It is not needed for the rest, and if the
+cluster path is the one that ships first, it fixes more scripts per line of code than anything else
+here.
+
 ---
 
 *Aside, unrelated to shaping: `MessageType` is a `const enum` and `RequestResponseMessageMap` a
